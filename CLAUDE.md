@@ -6,7 +6,7 @@ Replaces the Windows file picker dialog (IFileOpenDialog) with fzt's fuzzy finde
 
 Three components, all Rust (nightly required for `retour`):
 
-- **hook DLL** (`picker-hook.dll`): Loaded into every GUI process via `SetWindowsHookEx`. Hooks `CoCreateInstance` in `combase.dll` to intercept `CLSID_FileOpenDialog`. Returns a COM proxy implementing `IFileOpenDialog`.
+- **hook DLL** (`picker-hook.dll`): Loaded into every GUI process via `SetWindowsHookEx`. Hooks `CoCreateInstance` in `combase.dll` to intercept `CLSID_FileOpenDialog`. Returns a COM proxy implementing `IFileOpenDialog` and `IFileDialog2`.
 - **injector** (`picker.exe`): Background process that installs the global CBT hook and maintains a message loop. Killing it removes the hook from new processes.
 - **test-trigger** (`test-trigger.exe`): Standalone binary that calls `CoCreateInstance(CLSID_FileOpenDialog)` and `Show()` to test the hook without needing a real app.
 
@@ -26,17 +26,25 @@ cargo build
 
 ## Running
 
+Deployed to `~/bin` via release build. Starts automatically at login via a startup folder shortcut (created by `init.ps1`).
+
 ```sh
-# Start the injector (installs global hook)
-./target/debug/picker.exe
+# Manual start (if not auto-started)
+picker
 
 # Test with the test harness
-./target/debug/test-trigger.exe
+test-trigger
 
 # Or open any app's File > Open dialog
 ```
 
 Kill `picker.exe` to remove the hook from new processes. Already-loaded DLLs remain until those apps restart.
+
+## Development workflow
+
+The hook DLL loads into every GUI process and can't be replaced while those processes are running. For iterative development, either:
+- Build to a different `--target-dir` each time (e.g. `cargo build --target-dir target2`)
+- Or reboot to release all DLL locks before deploying to `~/bin`
 
 ## File Discovery
 
