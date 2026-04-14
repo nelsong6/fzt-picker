@@ -39,7 +39,7 @@ fn alloc_pwstr(s: &str) -> Result<PWSTR> {
     }
 }
 
-#[implement(IFileOpenDialog, IFileDialog, IFileDialog2, IModalWindow)]
+#[implement(IFileOpenDialog, IFileDialog, IFileDialog2, IFileDialogCustomize, IModalWindow)]
 pub struct FileOpenDialogProxy {
     state: Mutex<DialogState>,
 }
@@ -54,34 +54,21 @@ impl FileOpenDialogProxy {
 
 impl IModalWindow_Impl for FileOpenDialogProxy_Impl {
     fn Show(&self, hwndowner: HWND) -> Result<()> {
-        let start_dir;
         let filter;
         let pick_folders;
-        let multi_select;
 
         {
             let mut state = self.state.lock().unwrap();
             state.owner_hwnd = hwndowner;
-            start_dir = state.start_directory();
             filter = state.active_filter().map(String::from);
             pick_folders = state.options & FOS_PICKFOLDERS != 0;
-            multi_select = state.options & FOS_ALLOWMULTISELECT != 0;
         }
 
         crate::log(&format!(
-            "picker: Show() dir={start_dir} filter={filter:?} folders={pick_folders}"
+            "picker: Show() filter={filter:?} folders={pick_folders}"
         ));
 
-        let (yaml, count) = crate::walker::walk_yaml(&start_dir, filter.as_deref(), pick_folders);
-
-        if count == 0 {
-            crate::log("picker: no files found in directory");
-            return Err(Error::from(HRESULT::from_win32(ERROR_CANCELLED.0)));
-        }
-
-        crate::log(&format!("picker: generated YAML tree with {count} items"));
-
-        match crate::bridge::run_fzt(&yaml, multi_select) {
+        match crate::bridge::run_picker(filter.as_deref(), pick_folders) {
             Ok(paths) if !paths.is_empty() => {
                 let mut state = self.state.lock().unwrap();
                 state.result_path = Some(paths[0].clone());
@@ -90,7 +77,7 @@ impl IModalWindow_Impl for FileOpenDialogProxy_Impl {
             }
             Ok(_) => Err(Error::from(HRESULT::from_win32(ERROR_CANCELLED.0))),
             Err(e) => {
-                crate::log(&format!("picker: fzt failed: {e}"));
+                crate::log(&format!("picker: frontend failed: {e}"));
                 Err(Error::from(HRESULT::from_win32(ERROR_CANCELLED.0)))
             }
         }
@@ -271,6 +258,91 @@ impl IFileDialog2_Impl for FileOpenDialogProxy_Impl {
     }
 
     fn SetNavigationRoot(&self, _psi: Option<&IShellItem>) -> Result<()> {
+        Ok(())
+    }
+}
+
+impl IFileDialogCustomize_Impl for FileOpenDialogProxy_Impl {
+    fn EnableOpenDropDown(&self, _dwidctl: u32) -> Result<()> {
+        Ok(())
+    }
+    fn AddMenu(&self, _dwidctl: u32, _pszlabel: &PCWSTR) -> Result<()> {
+        Ok(())
+    }
+    fn AddPushButton(&self, _dwidctl: u32, _pszlabel: &PCWSTR) -> Result<()> {
+        Ok(())
+    }
+    fn AddComboBox(&self, _dwidctl: u32) -> Result<()> {
+        Ok(())
+    }
+    fn AddRadioButtonList(&self, _dwidctl: u32) -> Result<()> {
+        Ok(())
+    }
+    fn AddCheckButton(&self, _dwidctl: u32, _pszlabel: &PCWSTR, _bchecked: BOOL) -> Result<()> {
+        Ok(())
+    }
+    fn AddEditBox(&self, _dwidctl: u32, _psztext: &PCWSTR) -> Result<()> {
+        Ok(())
+    }
+    fn AddSeparator(&self, _dwidctl: u32) -> Result<()> {
+        Ok(())
+    }
+    fn AddText(&self, _dwidctl: u32, _psztext: &PCWSTR) -> Result<()> {
+        Ok(())
+    }
+    fn SetControlLabel(&self, _dwidctl: u32, _pszlabel: &PCWSTR) -> Result<()> {
+        Ok(())
+    }
+    fn GetControlState(&self, _dwidctl: u32) -> Result<CDCONTROLSTATEF> {
+        Ok(CDCONTROLSTATEF(0))
+    }
+    fn SetControlState(&self, _dwidctl: u32, _dwstate: CDCONTROLSTATEF) -> Result<()> {
+        Ok(())
+    }
+    fn GetEditBoxText(&self, _dwidctl: u32) -> Result<*mut u16> {
+        alloc_pwstr("")
+            .map(|p| p.0)
+    }
+    fn SetEditBoxText(&self, _dwidctl: u32, _psztext: &PCWSTR) -> Result<()> {
+        Ok(())
+    }
+    fn GetCheckButtonState(&self, _dwidctl: u32) -> Result<BOOL> {
+        Ok(FALSE)
+    }
+    fn SetCheckButtonState(&self, _dwidctl: u32, _bchecked: BOOL) -> Result<()> {
+        Ok(())
+    }
+    fn AddControlItem(&self, _dwidctl: u32, _dwiditem: u32, _pszlabel: &PCWSTR) -> Result<()> {
+        Ok(())
+    }
+    fn RemoveControlItem(&self, _dwidctl: u32, _dwiditem: u32) -> Result<()> {
+        Ok(())
+    }
+    fn RemoveAllControlItems(&self, _dwidctl: u32) -> Result<()> {
+        Ok(())
+    }
+    fn GetControlItemState(&self, _dwidctl: u32, _dwiditem: u32) -> Result<CDCONTROLSTATEF> {
+        Ok(CDCONTROLSTATEF(0))
+    }
+    fn SetControlItemState(&self, _dwidctl: u32, _dwiditem: u32, _dwstate: CDCONTROLSTATEF) -> Result<()> {
+        Ok(())
+    }
+    fn GetSelectedControlItem(&self, _dwidctl: u32) -> Result<u32> {
+        Ok(0)
+    }
+    fn SetSelectedControlItem(&self, _dwidctl: u32, _dwiditem: u32) -> Result<()> {
+        Ok(())
+    }
+    fn StartVisualGroup(&self, _dwidctl: u32, _pszlabel: &PCWSTR) -> Result<()> {
+        Ok(())
+    }
+    fn EndVisualGroup(&self) -> Result<()> {
+        Ok(())
+    }
+    fn MakeProminent(&self, _dwidctl: u32) -> Result<()> {
+        Ok(())
+    }
+    fn SetControlItemText(&self, _dwidctl: u32, _dwiditem: u32, _pszlabel: &PCWSTR) -> Result<()> {
         Ok(())
     }
 }

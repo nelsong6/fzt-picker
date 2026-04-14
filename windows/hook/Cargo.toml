@@ -17,6 +17,8 @@ windows = { version = "0.58", features = [
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_WindowsAndMessaging",
+    "Win32_System_Memory",
+    "Win32_System_Threading",
 ] }
 windows-implement = "0.58"
 windows-core = "0.58"

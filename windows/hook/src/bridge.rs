@@ -1,87 +1,95 @@
-use std::io::Write;
-use std::os::windows::process::CommandExt;
-use std::process::{Command, Stdio};
+use std::ffi::{CStr, CString};
+use std::path::Path;
 
-const CREATE_NEW_CONSOLE: u32 = 0x00000010;
+use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 
-/// Spawn fzt with a YAML tree file and capture the selection.
-/// Uses CREATE_NEW_CONSOLE so fzt gets a visible window for its TUI.
-/// stdout is piped to capture the result; fzt renders via CONOUT$.
-pub fn run_fzt(
-    yaml_content: &str,
-    _multi_select: bool,
+/// Call the Go picker frontend DLL in-process.
+/// The frontend allocates a console, runs the fzt TUI, and returns the selected path.
+pub fn run_picker(
+    filter: Option<&str>,
+    folders_only: bool,
 ) -> Result<Vec<String>, Box<dyn std::error::Error>> {
-    let fzt_path = find_fzt()?;
-    let temp_dir = std::env::var("TEMP").unwrap_or_else(|_| ".".to_string());
-    let yaml_path = std::path::Path::new(&temp_dir).join("picker-tree.yaml");
-
-    // Write YAML tree
-    {
-        let mut f = std::fs::File::create(&yaml_path)?;
-        f.write_all(yaml_content.as_bytes())?;
-    }
+    let dll_path = find_picker_dll()?;
 
     crate::log(&format!(
-        "picker: spawning fzt ({fzt_path}) with yaml at {}",
-        yaml_path.display()
+        "picker: loading frontend DLL ({dll_path}) filter={filter:?} folders={folders_only}"
     ));
 
-    let mut cmd = Command::new(&fzt_path);
+    unsafe {
+        let wide: Vec<u16> = dll_path.encode_utf16().chain(std::iter::once(0)).collect();
+        let hmod = LoadLibraryW(windows::core::PCWSTR(wide.as_ptr()))
+            .map_err(|e| format!("LoadLibrary failed: {e}"))?;
 
-    // CREATE_NEW_CONSOLE gives fzt a visible window for its TUI.
-    // fzt renders via CONOUT$, result goes to piped stdout.
-    cmd.creation_flags(CREATE_NEW_CONSOLE);
-    cmd.stdin(Stdio::null());
-    cmd.stdout(Stdio::piped());
+        // Get PickFile export
+        let pick_file_addr = GetProcAddress(hmod, windows::core::s!("PickFile"))
+            .ok_or("PickFile not found in picker_frontend.dll")?;
+        let pick_file: unsafe extern "C" fn(*const i8, i32) -> *mut i8 =
+            std::mem::transmute(pick_file_addr);
 
-    cmd.arg("--yaml").arg(&yaml_path);
-    cmd.arg("--border");
-    cmd.arg("--accept-nth=2");
+        // Get FreeString export
+        let free_string_addr = GetProcAddress(hmod, windows::core::s!("FreeString"))
+            .ok_or("FreeString not found in picker_frontend.dll")?;
+        let free_string: unsafe extern "C" fn(*mut i8) = std::mem::transmute(free_string_addr);
 
-    let child = cmd.spawn()?;
-    let output = child.wait_with_output()?;
+        // Build filter argument
+        let filter_cstr = filter.map(|f| CString::new(f).unwrap());
+        let filter_ptr = filter_cstr
+            .as_ref()
+            .map(|s| s.as_ptr())
+            .unwrap_or(std::ptr::null());
 
-    crate::log(&format!("picker: fzt exited with status={}", output.status));
+        let folders_flag = if folders_only { 1 } else { 0 };
 
-    // Clean up
-    let _ = std::fs::remove_file(&yaml_path);
+        crate::log("picker: calling PickFile");
+        let result_ptr = pick_file(filter_ptr, folders_flag);
 
-    if output.status.success() {
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        let paths: Vec<String> = stdout
+        if result_ptr.is_null() {
+            crate::log("picker: PickFile returned null (cancelled)");
+            return Ok(vec![]);
+        }
+
+        let result = CStr::from_ptr(result_ptr).to_string_lossy().to_string();
+        free_string(result_ptr);
+
+        crate::log(&format!("picker: PickFile returned: {result}"));
+
+        let paths: Vec<String> = result
             .lines()
             .map(|l| l.trim())
             .filter(|l| !l.is_empty())
             .map(String::from)
             .collect();
+
         Ok(paths)
-    } else {
-        Ok(vec![])
     }
 }
 
-fn find_fzt() -> Result<String, Box<dyn std::error::Error>> {
-    if let Ok(output) = Command::new("where.exe").arg("fzt").output() {
-        if output.status.success() {
-            let path = String::from_utf8_lossy(&output.stdout);
-            if let Some(first) = path.lines().next() {
-                let first = first.trim();
-                if !first.is_empty() {
-                    return Ok(first.to_string());
-                }
+fn find_picker_dll() -> Result<String, Box<dyn std::error::Error>> {
+    // Look next to the hook DLL (~/bin)
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            let candidate = dir.join("picker_frontend.dll");
+            if candidate.exists() {
+                return Ok(candidate.to_string_lossy().to_string());
             }
         }
     }
 
-    let candidates = [
-        "D:\\repos\\fzt\\fzt.exe",
-        "C:\\Program Files\\fzt\\fzt.exe",
-    ];
-    for path in &candidates {
-        if std::path::Path::new(path).exists() {
-            return Ok(path.to_string());
+    // Check ~/bin directly
+    if let Ok(userprofile) = std::env::var("USERPROFILE") {
+        let candidate = Path::new(&userprofile)
+            .join("bin")
+            .join("picker_frontend.dll");
+        if candidate.exists() {
+            return Ok(candidate.to_string_lossy().to_string());
         }
     }
 
-    Err("fzt.exe not found on PATH or in known locations".into())
+    // Dev location
+    let dev = "D:\\repos\\picker\\frontend\\cgo\\picker_frontend.dll";
+    if Path::new(dev).exists() {
+        return Ok(dev.to_string());
+    }
+
+    Err("picker_frontend.dll not found".into())
 }

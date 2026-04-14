@@ -1,4 +1,8 @@
 target/
 *.pdb
+*.exe
+*.dll
+*.h
+!*.go
 windows/target-trace/
 windows/target2/

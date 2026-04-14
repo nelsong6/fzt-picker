@@ -1,7 +1,6 @@
 mod bridge;
 mod hook;
 mod proxy;
-mod walker;
 
 use std::ffi::c_void;
 use windows::Win32::Foundation::{BOOL, HINSTANCE, LPARAM, LRESULT, TRUE, WPARAM};
