@@ -554,7 +554,6 @@ func paintWindow(hwnd uintptr) {
 
 	if grid != nil {
 		for y, row := range grid {
-			// Batch adjacent cells with the same style into one ExtTextOut call
 			x := 0
 			for x < len(row) {
 				cell := row[x]
@@ -563,13 +562,58 @@ func paintWindow(hwnd uintptr) {
 				}
 				fg, bg, _ := cell.Style.Decompose()
 
-				// Collect run of same-style cells
+				// Check if this is a wide character (icon)
+				cp := int(cell.Char)
+				isWide := cp > 0xFFFF || (cp >= 0xE000 && cp <= 0xF8FF)
+
+				if isWide {
+					// Draw wide character spanning 2 cells, centered
+					setTextColor.Call(hdc, uintptr(colorToBGR(fg, 0xCDD6F4)))
+					setBkColor.Call(hdc, uintptr(colorToBGR(bg, 0x1E1E2E)))
+
+					rc := RECT{
+						Left:   int32(x * charW),
+						Top:    int32(y * charH),
+						Right:  int32((x + 2) * charW),
+						Bottom: int32((y + 1) * charH),
+					}
+
+					// Fill background first
+					extTextOutW.Call(hdc,
+						uintptr(rc.Left), uintptr(rc.Top),
+						ETO_OPAQUE, uintptr(unsafe.Pointer(&rc)),
+						0, 0, 0,
+					)
+
+					// Center the icon in the 2-cell rect
+					chars := syscall.StringToUTF16(string(cell.Char))
+					charLen := len(chars) - 1
+					if charLen < 1 {
+						charLen = 1
+					}
+					// Draw centered: offset by half a cell width
+					iconX := int32(x*charW) + int32(charW/2)
+					textOutW.Call(hdc,
+						uintptr(iconX),
+						uintptr(rc.Top),
+						uintptr(unsafe.Pointer(&chars[0])),
+						uintptr(charLen),
+					)
+					x += 2
+					continue
+				}
+
+				// Collect run of same-style non-wide cells
 				var run []rune
 				runStart := x
 				for x < len(row) {
 					c := row[x]
 					if c.Char == 0 {
 						c.Char = ' '
+					}
+					cp := int(c.Char)
+					if cp > 0xFFFF || (cp >= 0xE000 && cp <= 0xF8FF) {
+						break // wide char — draw separately
 					}
 					cfG, cbG, _ := c.Style.Decompose()
 					if cfG != fg || cbG != bg {
@@ -579,7 +623,6 @@ func paintWindow(hwnd uintptr) {
 					x++
 				}
 
-				// Draw the run with ETO_OPAQUE (fills background + draws text in one call)
 				setTextColor.Call(hdc, uintptr(colorToBGR(fg, 0xCDD6F4)))
 				setBkColor.Call(hdc, uintptr(colorToBGR(bg, 0x1E1E2E)))
 
@@ -591,8 +634,6 @@ func paintWindow(hwnd uintptr) {
 				}
 
 				chars := syscall.StringToUTF16(string(run))
-				// Length is UTF-16 code units, not rune count.
-				// StringToUTF16 appends a null terminator, so subtract 1.
 				charLen := len(chars) - 1
 				if charLen < 1 {
 					charLen = 1
