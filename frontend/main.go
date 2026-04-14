@@ -43,6 +43,8 @@ func main() {
 	foldersOnly := false
 	title := "Pick a file"
 
+	startDir := ""
+
 	args := os.Args[1:]
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
@@ -59,13 +61,30 @@ func main() {
 				title = args[i+1]
 				i++
 			}
+		case "--start-dir":
+			if i+1 < len(args) {
+				startDir = args[i+1]
+				i++
+			}
 		}
 	}
 
-	items, err := queryEverything(filter, foldersOnly)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "picker-frontend: %v\n", err)
-		os.Exit(1)
+	// Use DirProvider for lazy loading if start dir is specified, otherwise fall back to Everything
+	var items []core.Item
+	var provider *core.DirProvider
+
+	if startDir != "" {
+		provider = core.NewDirProvider()
+		items = provider.LoadChildren(startDir)
+	}
+
+	if len(items) == 0 {
+		var err error
+		items, err = queryEverything(filter, foldersOnly)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "picker-frontend: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	if len(items) == 0 {
@@ -87,6 +106,8 @@ func main() {
 		Title:        title,
 		TreeMode:     true,
 		FrontendName: "picker",
+		Provider:     provider,
+		FocusedDir:   startDir,
 	}
 
 	bringToFront()

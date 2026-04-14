@@ -6,37 +6,171 @@ package main
 import "C"
 
 import (
-	"fmt"
-	"os"
-	"os/exec"
 	"path/filepath"
-	"sort"
+	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"unsafe"
 
+	"github.com/gdamore/tcell/v2"
 	"github.com/nelsong6/fzt/core"
+	"github.com/nelsong6/fzt/render"
 	"github.com/nelsong6/fzt-terminal/tui"
 )
 
+// Win32 API
 var (
-	kernel32              = syscall.NewLazyDLL("kernel32.dll")
-	user32                = syscall.NewLazyDLL("user32.dll")
-	allocConsole          = kernel32.NewProc("AllocConsole")
-	freeConsole           = kernel32.NewProc("FreeConsole")
-	getConsoleWindow      = kernel32.NewProc("GetConsoleWindow")
-	setForegroundWindowFn = user32.NewProc("SetForegroundWindow")
-	setConsoleTitleW      = kernel32.NewProc("SetConsoleTitleW")
+	kernel32 = syscall.NewLazyDLL("kernel32.dll")
+	user32   = syscall.NewLazyDLL("user32.dll")
+	gdi32    = syscall.NewLazyDLL("gdi32.dll")
+
+	getModuleHandle    = kernel32.NewProc("GetModuleHandleW")
+	registerClassExW   = user32.NewProc("RegisterClassExW")
+	createWindowExW    = user32.NewProc("CreateWindowExW")
+	destroyWindowFn    = user32.NewProc("DestroyWindow")
+	showWindowFn       = user32.NewProc("ShowWindow")
+	updateWindow       = user32.NewProc("UpdateWindow")
+	getMessageW        = user32.NewProc("GetMessageW")
+	translateMessageFn = user32.NewProc("TranslateMessage")
+	dispatchMessageFn  = user32.NewProc("DispatchMessageW")
+	postQuitMessageFn  = user32.NewProc("PostQuitMessage")
+	defWindowProcW     = user32.NewProc("DefWindowProcW")
+	enableWindowFn     = user32.NewProc("EnableWindow")
+	setForegroundWin   = user32.NewProc("SetForegroundWindow")
+	setFocus           = user32.NewProc("SetFocus")
+	invalidateRect     = user32.NewProc("InvalidateRect")
+	beginPaint         = user32.NewProc("BeginPaint")
+	endPaint           = user32.NewProc("EndPaint")
+	getClientRect      = user32.NewProc("GetClientRect")
+	setTimerFn         = user32.NewProc("SetTimer")
+	killTimerFn        = user32.NewProc("KillTimer")
+	getSystemMetrics   = user32.NewProc("GetSystemMetrics")
+	setWindowPos       = user32.NewProc("SetWindowPos")
+
+	// GDI
+	createFontW        = gdi32.NewProc("CreateFontW")
+	selectObject       = gdi32.NewProc("SelectObject")
+	deleteObject       = gdi32.NewProc("DeleteObject")
+	setTextColor       = gdi32.NewProc("SetTextColor")
+	setBkColor         = gdi32.NewProc("SetBkColor")
+	textOutW           = gdi32.NewProc("TextOutW")
+	fillRect           = user32.NewProc("FillRect")
+	createSolidBrush   = gdi32.NewProc("CreateSolidBrush")
+	getTextMetrics     = gdi32.NewProc("GetTextMetricsW")
+)
+
+// Win32 constants
+const (
+	WS_OVERLAPPEDWINDOW = 0x00CF0000
+	WS_POPUP            = 0x80000000
+	WS_VISIBLE          = 0x10000000
+	WS_CAPTION          = 0x00C00000
+	WS_SYSMENU          = 0x00080000
+	WS_THICKFRAME       = 0x00040000
+	WS_EX_TOOLWINDOW    = 0x00000080
+	CW_USEDEFAULT       = ^int32(0x7FFFFFFF)
+	SW_SHOW             = 5
+	WM_DESTROY          = 0x0002
+	WM_CLOSE            = 0x0010
+	WM_PAINT            = 0x000F
+	WM_CHAR             = 0x0102
+	WM_KEYDOWN          = 0x0100
+	WM_TIMER            = 0x0113
+	WM_SIZE             = 0x0005
+	WM_ERASEBKGND       = 0x0014
+	VK_UP               = 0x26
+	VK_DOWN             = 0x28
+	VK_LEFT             = 0x25
+	VK_RIGHT            = 0x27
+	VK_RETURN           = 0x0D
+	VK_ESCAPE           = 0x1B
+	VK_BACK             = 0x08
+	VK_TAB              = 0x09
+	VK_DELETE            = 0x2E
+	VK_HOME             = 0x24
+	VK_END              = 0x23
+	VK_PRIOR            = 0x21 // Page Up
+	VK_NEXT             = 0x22 // Page Down
+	SM_CXSCREEN         = 0
+	SM_CYSCREEN         = 1
+	SWP_NOZORDER        = 0x0004
+	TIMER_CURSOR        = 1
+)
+
+type MSG struct {
+	Hwnd    uintptr
+	Message uint32
+	WParam  uintptr
+	LParam  uintptr
+	Time    uint32
+	Pt      struct{ X, Y int32 }
+}
+
+type RECT struct {
+	Left, Top, Right, Bottom int32
+}
+
+type PAINTSTRUCT struct {
+	HDC         uintptr
+	Erase       int32
+	RcPaint     RECT
+	Restore     int32
+	IncUpdate   int32
+	RgbReserved [32]byte
+}
+
+type TEXTMETRIC struct {
+	Height           int32
+	Ascent           int32
+	Descent          int32
+	InternalLeading  int32
+	ExternalLeading  int32
+	AveCharWidth     int32
+	MaxCharWidth     int32
+	Weight           int32
+	Overhang         int32
+	DigitizedAspectX int32
+	DigitizedAspectY int32
+	FirstChar        uint16
+	LastChar         uint16
+	DefaultChar      uint16
+	BreakChar        uint16
+	Italic           byte
+	Underlined       byte
+	StruckOut        byte
+	PitchAndFamily   byte
+	CharSet          byte
+}
+
+// Picker state — accessed from wndProc
+var (
+	pickerMu      sync.Mutex
+	pickerSession *render.Session
+	pickerFrame   render.SessionFrame
+	pickerGrid    [][]core.StyledRune
+	pickerResult  string
+	pickerHwnd    uintptr
+	ownerHwnd     uintptr
+	charW, charH  int
+	font          uintptr
+	gridCols      int
+	gridRows      int
 )
 
 //export PickFile
-func PickFile(filterC *C.char, foldersOnly C.int) *C.char {
+func PickFile(filterC *C.char, foldersOnly C.int, startDirC *C.char, hwndOwner uintptr) *C.char {
 	filter := ""
 	if filterC != nil {
 		filter = C.GoString(filterC)
 	}
+	startDir := ""
+	if startDirC != nil {
+		startDir = C.GoString(startDirC)
+	}
+	_ = filter // TODO: use for filtering
 
-	result := runPicker(filter, foldersOnly != 0)
+	result := runPicker(foldersOnly != 0, startDir, hwndOwner)
 	if result == "" {
 		return nil
 	}
@@ -48,18 +182,36 @@ func FreeString(s *C.char) {
 	C.free(unsafe.Pointer(s))
 }
 
-func runPicker(filter string, foldersOnly bool) string {
+func runPicker(foldersOnly bool, startDir string, hwndOwner uintptr) string {
+	runtime.LockOSThread()
+	defer runtime.UnlockOSThread()
+
+	ownerHwnd = hwndOwner
+	pickerResult = ""
+
 	title := "Pick a file"
 	if foldersOnly {
 		title = "Pick a folder"
 	}
 
-	items, err := queryEverything(filter, foldersOnly)
-	if err != nil || len(items) == 0 {
+	// Create the window first — this computes gridCols/gridRows from screen size
+	hwnd := createPickerWindow(title)
+	if hwnd == 0 {
 		return ""
 	}
+	pickerHwnd = hwnd
 
-	headerItem := core.Item{Fields: []string{"Name", "Path"}, Depth: -1}
+	// Build initial items using DirProvider wrapped to filter hidden files
+	provider := &pickerDirProvider{inner: core.NewDirProvider()}
+	var items []core.Item
+	if startDir != "" {
+		items = provider.LoadChildren(startDir)
+	}
+	if len(items) == 0 {
+		items = core.ListDriveRoots()
+	}
+
+	headerItem := core.Item{Fields: []string{"Name"}, Depth: -1}
 	items = append([]core.Item{headerItem}, items...)
 
 	cfg := tui.Config{
@@ -69,220 +221,465 @@ func runPicker(filter string, foldersOnly bool) string {
 		DepthPenalty: 5,
 		HeaderLines:  1,
 		Nth:          []int{1},
-		AcceptNth:    []int{2},
+		AcceptNth:    []int{1},
 		Title:        title,
 		TreeMode:     true,
 		FrontendName: "picker",
+		Provider:     provider,
+		FocusedDir:   startDir,
 	}
 
-	// Allocate a console for the TUI to render into.
-	// This creates a visible console window attached to the host process.
-	allocConsole.Call()
-	defer freeConsole.Call()
+	pickerSession = tui.NewTreeSession(items, cfg, gridCols, gridRows)
 
-	// Set console title
-	titleW, _ := syscall.UTF16PtrFromString(title)
-	setConsoleTitleW.Call(uintptr(unsafe.Pointer(titleW)))
-
-	// Bring the console window to the foreground
-	hwnd, _, _ := getConsoleWindow.Call()
-	if hwnd != 0 {
-		setForegroundWindowFn.Call(hwnd)
+	// Disable owner (modal)
+	if ownerHwnd != 0 {
+		enableWindowFn.Call(ownerHwnd, 0)
 	}
 
-	// Reopen stdin/stdout/stderr to the new console so tcell can use it
-	conin, _ := os.OpenFile("CONIN$", os.O_RDWR, 0)
-	conout, _ := os.OpenFile("CONOUT$", os.O_RDWR, 0)
-	os.Stdin = conin
-	os.Stdout = conout
-	os.Stderr = conout
+	// Show and focus
+	showWindowFn.Call(hwnd, SW_SHOW)
+	updateWindow.Call(hwnd)
+	setForegroundWin.Call(hwnd)
+	setFocus.Call(hwnd)
 
-	result, err := tui.Run(items, cfg)
-	if err != nil {
-		return ""
-	}
+	// Initial render
+	renderAndInvalidate()
 
-	return strings.TrimSpace(result)
-}
-
-// queryEverything queries the Everything CLI and builds an item tree.
-func queryEverything(filterPattern string, foldersOnly bool) ([]core.Item, error) {
-	esPath, err := findES()
-	if err != nil {
-		return nil, err
-	}
-
-	args := []string{"-n", "50000"}
-	if foldersOnly {
-		args = append(args, "/ad")
-	} else {
-		args = append(args, "/a-d")
-	}
-
-	var searchArgs []string
-	if filterPattern != "" {
-		exts := parseExtensions(filterPattern)
-		if len(exts) > 0 {
-			searchArgs = append(searchArgs, "ext:"+strings.Join(exts, ";"))
-		}
-	}
-	searchArgs = append(searchArgs, `!.git\`, `!$Recycle.Bin\`, `!node_modules\`)
-
-	cmd := exec.Command(esPath, append(args, searchArgs...)...)
-	out, err := cmd.Output()
-	if err != nil {
-		return nil, fmt.Errorf("es.exe failed: %w", err)
-	}
-
-	lines := strings.Split(strings.TrimSpace(string(out)), "\n")
-	if len(lines) == 0 || (len(lines) == 1 && lines[0] == "") {
-		return nil, nil
-	}
-
-	return buildTree(lines), nil
-}
-
-func parseExtensions(pattern string) []string {
-	var exts []string
-	for _, p := range strings.Split(pattern, ";") {
-		p = strings.TrimSpace(p)
-		if ext, ok := strings.CutPrefix(p, "*."); ok {
-			if ext != "*" && ext != "" {
-				exts = append(exts, ext)
-			}
-		}
-	}
-	return exts
-}
-
-type node struct {
-	name     string
-	fullPath string
-	children map[string]*node
-	order    []string
-}
-
-func buildTree(paths []string) []core.Item {
-	root := &node{children: make(map[string]*node)}
-
-	for _, p := range paths {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-
-		parts := splitPath(p)
-		if len(parts) == 0 {
-			continue
-		}
-
-		current := root
-		for i, part := range parts {
-			if current.children[part] == nil {
-				current.children[part] = &node{
-					name:     part,
-					children: make(map[string]*node),
-				}
-				current.order = append(current.order, part)
-			}
-			if i == len(parts)-1 {
-				current.children[part].fullPath = p
-			}
-			current = current.children[part]
-		}
-	}
-
-	var items []core.Item
-	var walk func(n *node, depth int, parentIdx int)
-	walk = func(n *node, depth int, parentIdx int) {
-		childNames := make([]string, len(n.order))
-		copy(childNames, n.order)
-		sort.SliceStable(childNames, func(i, j int) bool {
-			ci := n.children[childNames[i]]
-			cj := n.children[childNames[j]]
-			iIsFolder := len(ci.children) > 0
-			jIsFolder := len(cj.children) > 0
-			if iIsFolder != jIsFolder {
-				return iIsFolder
-			}
-			return strings.ToLower(childNames[i]) < strings.ToLower(childNames[j])
-		})
-
-		for _, name := range childNames {
-			child := n.children[name]
-			isFolder := len(child.children) > 0
-
-			idx := len(items)
-			item := core.Item{
-				Fields:      []string{child.name, child.fullPath},
-				Depth:       depth,
-				ParentIdx:   parentIdx,
-				HasChildren: isFolder,
-			}
-			items = append(items, item)
-
-			if isFolder {
-				walk(child, depth+1, idx)
-				for ci := idx + 1; ci < len(items); ci++ {
-					if items[ci].ParentIdx == idx {
-						items[idx].Children = append(items[idx].Children, ci)
-					}
-				}
-			}
-		}
-	}
-
-	walk(root, 0, -1)
-	return items
-}
-
-func splitPath(p string) []string {
-	p = filepath.Clean(p)
-	var parts []string
-	for p != "" {
-		dir, file := filepath.Split(p)
-		if file != "" {
-			parts = append([]string{file}, parts...)
-		}
-		if dir == p {
-			drive := strings.TrimRight(dir, `\/`)
-			if drive != "" {
-				parts = append([]string{drive}, parts...)
-			}
+	// Modal message loop
+	var msg MSG
+	for {
+		ret, _, _ := getMessageW.Call(
+			uintptr(unsafe.Pointer(&msg)),
+			0, 0, 0,
+		)
+		if ret == 0 || ret == uintptr(^uintptr(0)) {
 			break
 		}
-		p = strings.TrimRight(dir, `\/`)
+		translateMessageFn.Call(uintptr(unsafe.Pointer(&msg)))
+		dispatchMessageFn.Call(uintptr(unsafe.Pointer(&msg)))
 	}
-	return parts
+
+	// Re-enable owner
+	if ownerHwnd != 0 {
+		enableWindowFn.Call(ownerHwnd, 1)
+		setForegroundWin.Call(ownerHwnd)
+	}
+
+	// Clean up
+	destroyWindowFn.Call(hwnd)
+	if font != 0 {
+		deleteObject.Call(font)
+		font = 0
+	}
+
+	return pickerResult
 }
 
-func findES() (string, error) {
-	if path, err := exec.LookPath("es"); err == nil {
-		if strings.Contains(strings.ToLower(path), "everything") {
-			return path, nil
+func renderAndInvalidate() {
+	pickerMu.Lock()
+	pickerFrame = pickerSession.Render()
+	pickerGrid = parseANSIGrid(pickerFrame.ANSI, gridCols, gridRows)
+	pickerMu.Unlock()
+	if pickerHwnd != 0 {
+		invalidateRect.Call(pickerHwnd, 0, 1)
+	}
+}
+
+func handleKeyInput(key tcell.Key, ch rune) {
+	frame, action := pickerSession.HandleKey(key, ch)
+	pickerMu.Lock()
+	pickerFrame = frame
+	pickerGrid = parseANSIGrid(frame.ANSI, gridCols, gridRows)
+	pickerMu.Unlock()
+
+	if strings.HasPrefix(action, "select:") {
+		pickerResult = strings.TrimSpace(action[7:])
+		postQuitMessageFn.Call(0)
+		return
+	}
+	if action == "cancel" {
+		pickerResult = ""
+		postQuitMessageFn.Call(0)
+		return
+	}
+
+	invalidateRect.Call(pickerHwnd, 0, 1)
+}
+
+// Window procedure
+func wndProc(hwnd, msg, wParam, lParam uintptr) uintptr {
+	switch msg {
+	case WM_KEYDOWN:
+		switch wParam {
+		case VK_UP:
+			handleKeyInput(tcell.KeyUp, 0)
+			return 0
+		case VK_DOWN:
+			handleKeyInput(tcell.KeyDown, 0)
+			return 0
+		case VK_LEFT:
+			handleKeyInput(tcell.KeyLeft, 0)
+			return 0
+		case VK_RIGHT:
+			handleKeyInput(tcell.KeyRight, 0)
+			return 0
+		case VK_RETURN:
+			handleKeyInput(tcell.KeyEnter, 0)
+			return 0
+		case VK_ESCAPE:
+			handleKeyInput(tcell.KeyEscape, 0)
+			return 0
+		case VK_BACK:
+			handleKeyInput(tcell.KeyBackspace2, 0)
+			return 0
+		case VK_TAB:
+			handleKeyInput(tcell.KeyTab, 0)
+			return 0
+		case VK_DELETE:
+			handleKeyInput(tcell.KeyDelete, 0)
+			return 0
+		case VK_HOME:
+			handleKeyInput(tcell.KeyHome, 0)
+			return 0
+		case VK_END:
+			handleKeyInput(tcell.KeyEnd, 0)
+			return 0
+		case VK_PRIOR:
+			handleKeyInput(tcell.KeyPgUp, 0)
+			return 0
+		case VK_NEXT:
+			handleKeyInput(tcell.KeyPgDn, 0)
+			return 0
+		}
+	case WM_CHAR:
+		ch := rune(wParam)
+		if ch >= 32 { // printable
+			handleKeyInput(tcell.KeyRune, ch)
+			return 0
+		}
+		// Ctrl+key combos arrive as control characters
+		switch ch {
+		case 0x03: // Ctrl+C
+			handleKeyInput(tcell.KeyCtrlC, 0)
+			return 0
+		case 0x15: // Ctrl+U
+			handleKeyInput(tcell.KeyCtrlU, 0)
+			return 0
+		case 0x17: // Ctrl+W
+			handleKeyInput(tcell.KeyCtrlW, 0)
+			return 0
+		}
+	case WM_PAINT:
+		paintWindow(hwnd)
+		return 0
+	case WM_ERASEBKGND:
+		return 1 // we handle background in WM_PAINT
+	case WM_CLOSE:
+		pickerResult = ""
+		postQuitMessageFn.Call(0)
+		return 0
+	}
+	ret, _, _ := defWindowProcW.Call(hwnd, msg, wParam, lParam)
+	return ret
+}
+
+var wndProcCb = syscall.NewCallback(wndProc)
+
+func createPickerWindow(title string) uintptr {
+	hInst, _, _ := getModuleHandle.Call(0)
+	className, _ := syscall.UTF16PtrFromString("FztPicker")
+	titleW, _ := syscall.UTF16PtrFromString(title)
+
+	type WNDCLASSEX struct {
+		Size       uint32
+		Style      uint32
+		WndProc    uintptr
+		ClsExtra   int32
+		WndExtra   int32
+		Instance   uintptr
+		Icon       uintptr
+		Cursor     uintptr
+		Background uintptr
+		MenuName   uintptr
+		ClassName  uintptr
+		IconSm     uintptr
+	}
+
+	// Load arrow cursor
+	loadCursor := user32.NewProc("LoadCursorW")
+	cursor, _, _ := loadCursor.Call(0, 32512) // IDC_ARROW
+
+	wc := WNDCLASSEX{
+		Size:      uint32(unsafe.Sizeof(WNDCLASSEX{})),
+		Style:     0x0003, // CS_HREDRAW | CS_VREDRAW
+		WndProc:   wndProcCb,
+		Instance:  hInst,
+		ClassName: uintptr(unsafe.Pointer(className)),
+		Cursor:    cursor,
+	}
+	registerClassExW.Call(uintptr(unsafe.Pointer(&wc)))
+
+	// Get DPI for font scaling
+	getDpi := user32.NewProc("GetDpiForSystem")
+	dpi, _, _ := getDpi.Call()
+	if dpi == 0 {
+		dpi = 96
+	}
+	fontSize := int(dpi) * 20 / 96 // 20px at 96 DPI, scales up
+
+	// Create a monospace Nerd Font for icons
+	fontName, _ := syscall.UTF16PtrFromString("FiraCode Nerd Font Mono")
+	font, _, _ = createFontW.Call(
+		uintptr(uint32(fontSize)), // height
+		0, 0, 0,
+		400, // weight (normal)
+		0, 0, 0, // italic, underline, strikeout
+		0,    // charset (default)
+		0, 0, 0,
+		uintptr(1), // FIXED_PITCH
+		uintptr(unsafe.Pointer(fontName)),
+	)
+
+	// Measure character size using a temp DC
+	getDC := user32.NewProc("GetDC")
+	releaseDC := user32.NewProc("ReleaseDC")
+	dc, _, _ := getDC.Call(0)
+	oldFont, _, _ := selectObject.Call(dc, font)
+	var tm TEXTMETRIC
+	getTextMetrics.Call(dc, uintptr(unsafe.Pointer(&tm)))
+	charW = int(tm.AveCharWidth)
+	charH = int(tm.Height)
+	selectObject.Call(dc, oldFont)
+	releaseDC.Call(0, dc)
+
+	// 80% of screen, compute grid size from that
+	screenW, _, _ := getSystemMetrics.Call(SM_CXSCREEN)
+	screenH, _, _ := getSystemMetrics.Call(SM_CYSCREEN)
+	winW := int(screenW) * 80 / 100
+	winH := int(screenH) * 80 / 100
+
+	// Compute grid dimensions from window size (subtract borders/title)
+	clientW := winW - 16
+	clientH := winH - 40
+	gridCols = clientW / charW
+	gridRows = clientH / charH
+
+	x := (int(screenW) - winW) / 2
+	y := (int(screenH) - winH) / 2
+
+	style := uintptr(WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE)
+
+	hwnd, _, _ := createWindowExW.Call(
+		0,
+		uintptr(unsafe.Pointer(className)),
+		uintptr(unsafe.Pointer(titleW)),
+		style,
+		uintptr(x), uintptr(y),
+		uintptr(winW), uintptr(winH),
+		ownerHwnd, // owner
+		0, hInst, 0,
+	)
+
+	return hwnd
+}
+
+// Catppuccin Mocha palette
+var catppuccin = map[tcell.Color]uint32{
+	tcell.ColorDefault: 0x1E1E2E, // base
+	tcell.ColorBlack:   0x45475A, // surface1
+	tcell.ColorMaroon:  0xEBA0AC, // maroon
+	tcell.ColorGreen:   0xA6E3A1, // green
+	tcell.ColorOlive:   0xF9E2AF, // yellow
+	tcell.ColorNavy:    0x89B4FA, // blue
+	tcell.ColorPurple:  0xF5C2E7, // pink
+	tcell.ColorTeal:    0x94E2D5, // teal
+	tcell.ColorSilver:  0xBAC2DE, // subtext1
+	tcell.ColorGray:    0x585B70, // surface2
+	tcell.ColorRed:     0xF38BA8, // red
+	tcell.ColorLime:    0xA6E3A1, // green
+	tcell.ColorYellow:  0xF9E2AF, // yellow
+	tcell.ColorBlue:    0x89B4FA, // blue
+	tcell.ColorFuchsia: 0xCBA6F7, // mauve
+	tcell.ColorAqua:    0x89DCEB, // sky
+	tcell.ColorWhite:   0xCDD6F4, // text
+}
+
+func colorToRGB(c tcell.Color) uint32 {
+	if c == tcell.ColorDefault {
+		return 0x1E1E2E // Catppuccin base
+	}
+	if mapped, ok := catppuccin[c]; ok {
+		return mapped
+	}
+	// True color
+	r, g, b := c.RGB()
+	return uint32(b)<<16 | uint32(g)<<8 | uint32(r) // GDI uses BGR
+}
+
+func colorToBGR(c tcell.Color, defaultColor uint32) uint32 {
+	if c == tcell.ColorDefault {
+		// Convert default from RGB to BGR
+		r := (defaultColor >> 16) & 0xFF
+		g := (defaultColor >> 8) & 0xFF
+		b := defaultColor & 0xFF
+		return b<<16 | g<<8 | r
+	}
+	if mapped, ok := catppuccin[c]; ok {
+		// Palette is stored as RGB, convert to BGR for GDI
+		r := (mapped >> 16) & 0xFF
+		g := (mapped >> 8) & 0xFF
+		b := mapped & 0xFF
+		return b<<16 | g<<8 | r
+	}
+	r, g, b := c.RGB()
+	return uint32(b)<<16 | uint32(g)<<8 | uint32(r)
+}
+
+var (
+	extTextOutW = gdi32.NewProc("ExtTextOutW")
+)
+
+const ETO_OPAQUE = 0x0002
+
+func paintWindow(hwnd uintptr) {
+	var ps PAINTSTRUCT
+	hdc, _, _ := beginPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+
+	// Select font
+	oldFont, _, _ := selectObject.Call(hdc, font)
+
+	pickerMu.Lock()
+	grid := pickerGrid
+	pickerMu.Unlock()
+
+	if grid != nil {
+		for y, row := range grid {
+			// Batch adjacent cells with the same style into one ExtTextOut call
+			x := 0
+			for x < len(row) {
+				cell := row[x]
+				if cell.Char == 0 {
+					cell.Char = ' '
+				}
+				fg, bg, _ := cell.Style.Decompose()
+
+				// Collect run of same-style cells
+				var run []rune
+				runStart := x
+				for x < len(row) {
+					c := row[x]
+					if c.Char == 0 {
+						c.Char = ' '
+					}
+					cfG, cbG, _ := c.Style.Decompose()
+					if cfG != fg || cbG != bg {
+						break
+					}
+					run = append(run, c.Char)
+					x++
+				}
+
+				// Draw the run with ETO_OPAQUE (fills background + draws text in one call)
+				setTextColor.Call(hdc, uintptr(colorToBGR(fg, 0xCDD6F4)))
+				setBkColor.Call(hdc, uintptr(colorToBGR(bg, 0x1E1E2E)))
+
+				rc := RECT{
+					Left:   int32(runStart * charW),
+					Top:    int32(y * charH),
+					Right:  int32(x * charW),
+					Bottom: int32((y + 1) * charH),
+				}
+
+				chars := syscall.StringToUTF16(string(run))
+				// Length is UTF-16 code units, not rune count.
+				// StringToUTF16 appends a null terminator, so subtract 1.
+				charLen := len(chars) - 1
+				if charLen < 1 {
+					charLen = 1
+				}
+				extTextOutW.Call(hdc,
+					uintptr(rc.Left),
+					uintptr(rc.Top),
+					ETO_OPAQUE,
+					uintptr(unsafe.Pointer(&rc)),
+					uintptr(unsafe.Pointer(&chars[0])),
+					uintptr(charLen),
+					0,
+				)
+			}
+		}
+	} else {
+		// No grid yet — fill with background
+		var rc RECT
+		getClientRect.Call(hwnd, uintptr(unsafe.Pointer(&rc)))
+		setBkColor.Call(hdc, uintptr(colorToBGR(tcell.ColorDefault, 0x1E1E2E)))
+		extTextOutW.Call(hdc, 0, 0, ETO_OPAQUE, uintptr(unsafe.Pointer(&rc)), 0, 0, 0)
+	}
+
+	selectObject.Call(hdc, oldFont)
+	endPaint.Call(hwnd, uintptr(unsafe.Pointer(&ps)))
+}
+
+// StyledCell holds a character and its style from the ANSI grid
+// We need this exported from render package, or we parse ANSI ourselves
+
+// parseANSIGrid parses ANSI output into a grid of styled cells
+func parseANSIGrid(ansi string, cols, rows int) [][]core.StyledRune {
+	// Use core.ParseANSI to get styled runes per line
+	lines := strings.Split(ansi, "\n")
+	grid := make([][]core.StyledRune, rows)
+
+	for y := 0; y < rows; y++ {
+		grid[y] = make([]core.StyledRune, cols)
+		for x := range grid[y] {
+			grid[y][x] = core.StyledRune{Char: ' ', Style: tcell.StyleDefault}
+		}
+
+		if y < len(lines) {
+			styled := core.ParseANSI(lines[y])
+			for x, sr := range styled {
+				if x >= cols {
+					break
+				}
+				grid[y][x] = core.StyledRune{
+					Char:  sr.Char,
+					Style: sr.Style,
+				}
+			}
 		}
 	}
 
-	if local := os.Getenv("LOCALAPPDATA"); local != "" {
-		winget := filepath.Join(local,
-			"Microsoft", "WinGet", "Packages",
-			"voidtools.Everything.Cli_Microsoft.Winget.Source_8wekyb3d8bbwe",
-			"es.exe")
-		if _, err := os.Stat(winget); err == nil {
-			return winget, nil
-		}
-	}
+	return grid
+}
 
-	for _, p := range []string{
-		`C:\Program Files\Everything\es.exe`,
-		`C:\Program Files\Everything 1.5a\es.exe`,
-	} {
-		if _, err := os.Stat(p); err == nil {
-			return p, nil
-		}
-	}
+// pickerDirProvider wraps DirProvider and filters out hidden/system files on Windows.
+type pickerDirProvider struct {
+	inner *core.DirProvider
+}
 
-	return "", fmt.Errorf("es.exe not found")
+func (p *pickerDirProvider) LoadChildren(parentPath string) []core.Item {
+	items := p.inner.LoadChildren(parentPath)
+	var filtered []core.Item
+	for _, item := range items {
+		name := item.Fields[0]
+		fullPath := filepath.Join(parentPath, name)
+		if isHiddenFile(fullPath) {
+			continue
+		}
+		filtered = append(filtered, item)
+	}
+	return filtered
+}
+
+func isHiddenFile(path string) bool {
+	pathW, _ := syscall.UTF16PtrFromString(path)
+	attrs, err := syscall.GetFileAttributes(pathW)
+	if err != nil {
+		return false
+	}
+	const FILE_ATTRIBUTE_HIDDEN = 0x2
+	const FILE_ATTRIBUTE_SYSTEM = 0x4
+	return attrs&(FILE_ATTRIBUTE_HIDDEN|FILE_ATTRIBUTE_SYSTEM) != 0
 }
 
 func main() {}

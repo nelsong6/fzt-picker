@@ -56,19 +56,21 @@ impl IModalWindow_Impl for FileOpenDialogProxy_Impl {
     fn Show(&self, hwndowner: HWND) -> Result<()> {
         let filter;
         let pick_folders;
+        let start_dir;
 
         {
             let mut state = self.state.lock().unwrap();
             state.owner_hwnd = hwndowner;
             filter = state.active_filter().map(String::from);
             pick_folders = state.options & FOS_PICKFOLDERS != 0;
+            start_dir = state.start_directory();
         }
 
         crate::log(&format!(
-            "picker: Show() filter={filter:?} folders={pick_folders}"
+            "picker: Show() dir={start_dir} filter={filter:?} folders={pick_folders}"
         ));
 
-        match crate::bridge::run_picker(filter.as_deref(), pick_folders) {
+        match crate::bridge::run_picker(filter.as_deref(), pick_folders, &start_dir, hwndowner) {
             Ok(paths) if !paths.is_empty() => {
                 let mut state = self.state.lock().unwrap();
                 state.result_path = Some(paths[0].clone());
