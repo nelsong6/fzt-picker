@@ -154,6 +154,8 @@ var (
 	ownerHwnd     uintptr
 	charW, charH  int
 	font          uintptr
+	fontBold      uintptr
+	fontItalic    uintptr
 	gridCols      int
 	gridRows      int
 )
@@ -270,6 +272,14 @@ func runPicker(foldersOnly bool, startDir string, hwndOwner uintptr) string {
 	if font != 0 {
 		deleteObject.Call(font)
 		font = 0
+	}
+	if fontBold != 0 {
+		deleteObject.Call(fontBold)
+		fontBold = 0
+	}
+	if fontItalic != 0 {
+		deleteObject.Call(fontItalic)
+		fontItalic = 0
 	}
 
 	return pickerResult
@@ -430,13 +440,30 @@ func createPickerWindow(title string) uintptr {
 
 	fontName, _ := syscall.UTF16PtrFromString(tui.DefaultFontName)
 	font, _, _ = createFontW.Call(
-		uintptr(uint32(fontSize)), // height
+		uintptr(uint32(fontSize)),
 		0, 0, 0,
 		400, // weight (normal)
 		0, 0, 0, // italic, underline, strikeout
-		0,    // charset (default)
-		0, 0, 0,
+		0, 0, 0, 0,
 		uintptr(1), // FIXED_PITCH
+		uintptr(unsafe.Pointer(fontName)),
+	)
+	fontBold, _, _ = createFontW.Call(
+		uintptr(uint32(fontSize)),
+		0, 0, 0,
+		700, // weight (bold)
+		0, 0, 0,
+		0, 0, 0, 0,
+		uintptr(1),
+		uintptr(unsafe.Pointer(fontName)),
+	)
+	fontItalic, _, _ = createFontW.Call(
+		uintptr(uint32(fontSize)),
+		0, 0, 0,
+		400,
+		1, 0, 0, // italic=1
+		0, 0, 0, 0,
+		uintptr(1),
 		uintptr(unsafe.Pointer(fontName)),
 	)
 
@@ -514,6 +541,7 @@ func paintWindow(hwnd uintptr) {
 	pickerMu.Unlock()
 
 	if grid != nil {
+		lastFont := font
 		for y, row := range grid {
 			x := 0
 			for x < len(row) {
@@ -521,7 +549,19 @@ func paintWindow(hwnd uintptr) {
 				if cell.Char == 0 {
 					cell.Char = ' '
 				}
-				fg, bg, _ := cell.Style.Decompose()
+				fg, bg, attrs := cell.Style.Decompose()
+
+				// Select font based on attributes
+				wantFont := font
+				if attrs&tcell.AttrBold != 0 {
+					wantFont = fontBold
+				} else if attrs&tcell.AttrItalic != 0 {
+					wantFont = fontItalic
+				}
+				if wantFont != lastFont {
+					selectObject.Call(hdc, wantFont)
+					lastFont = wantFont
+				}
 
 				// Check if this is a wide character (icon)
 				cp := int(cell.Char)
@@ -576,8 +616,8 @@ func paintWindow(hwnd uintptr) {
 					if cp > 0xFFFF || (cp >= 0xE000 && cp <= 0xF8FF) {
 						break // wide char — draw separately
 					}
-					cfG, cbG, _ := c.Style.Decompose()
-					if cfG != fg || cbG != bg {
+					cfG, cbG, cAttrs := c.Style.Decompose()
+					if cfG != fg || cbG != bg || cAttrs != attrs {
 						break
 					}
 					run = append(run, c.Char)
