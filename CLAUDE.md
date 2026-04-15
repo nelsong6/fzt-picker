@@ -43,6 +43,16 @@ Picker reads all colors from `tui/style.go` (`tui.PaletteRGB`, `tui.ColorToRGB()
 - **MinGW-w64 (GCC)**: Required for CGo DLL compilation (`go build -buildmode=c-shared`).
 - **Rust nightly**: Required by the `retour` crate's `static_detour!` macro.
 
+### Shared vs rendering-specific code
+
+The CGo DLL and standalone binary share item loading, DirProvider setup, hidden file filtering, and session config. This should live in a shared package (`frontend/picker/`) that both import:
+
+- **`frontend/picker/`** — shared: `pickerDirProvider` (wraps `core.DirProvider` with hidden file filtering), item loading from a start directory, session config (layout, border, tiered, AcceptNth, etc.)
+- **`frontend/cgo/`** — CGo DLL: Win32 window + GDI rendering + modal message loop (COM hook path)
+- **`frontend/`** — standalone binary: `tui.Run()` via tcell (shell path, `explore` at-command)
+
+Both paths produce identical fzt sessions. Only the rendering surface differs.
+
 ## Building
 
 ```sh
