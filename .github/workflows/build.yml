@@ -24,6 +24,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: frontend/go.mod
+          cache-dependency-path: frontend/go.sum
 
       - name: Resolve local replace directives
         shell: bash
@@ -31,6 +32,7 @@ jobs:
         run: |
           go mod edit -dropreplace github.com/nelsong6/fzt
           go mod edit -dropreplace github.com/nelsong6/fzt-terminal
+          go mod edit -droprequire github.com/nelsong6/fzt-terminal
           GOPROXY=direct go get github.com/nelsong6/fzt@latest
           GOPROXY=direct go get github.com/nelsong6/fzt-terminal@latest
           go mod tidy
