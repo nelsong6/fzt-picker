@@ -4,6 +4,15 @@ on:
   repository_dispatch:
     types: [fzt-updated]
 
+# The called reusable workflow declares contents:write + actions:write. When
+# the caller leaves permissions implicit, the token falls back to the repo's
+# default_workflow_permissions ('read') and the workflow fails at startup
+# before any job runs (blank log, 1-second duration). Declare the permissions
+# here to grant the token what the template needs.
+permissions:
+  contents: write
+  actions: write
+
 concurrency:
   group: dependency-update
   cancel-in-progress: false
