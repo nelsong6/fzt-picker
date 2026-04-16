@@ -28,6 +28,7 @@ jobs:
         shell: bash
         env:
           GOPROXY: direct
+          GONOSUMCHECK: github.com/nelsong6/*
         run: |
           go get github.com/nelsong6/fzt@latest
           go get github.com/nelsong6/fzt-terminal@latest
