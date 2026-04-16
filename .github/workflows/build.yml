@@ -3,9 +3,14 @@ name: Build
 on:
   push:
     branches: [main]
+    paths-ignore: [Dockerfile]
 
 permissions:
   contents: write
+  packages: read
+
+env:
+  IMAGE: ghcr.io/nelsong6/fzt-picker:latest
 
 jobs:
   build:
@@ -13,77 +18,43 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Rust (COM hook + injector + test-trigger) ──────────────
-      - uses: dtolnay/rust-toolchain@nightly
-      - uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            windows/target
-          key: rust-${{ hashFiles('windows/Cargo.lock') }}
-          restore-keys: rust-
-      - name: Build Rust binaries
+      - name: Pull builder image
         shell: bash
-        working-directory: windows
-        run: cargo build --release
-
-      # ── Go (CGo DLL + standalone frontend) ─────────────────────
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: frontend/go.mod
-          cache-dependency-path: |
-            frontend/go.sum
-            frontend/cgo/go.sum
-
-      - uses: actions/cache@v4
-        id: msys2-cache
-        with:
-          path: C:\msys64\ucrt64
-          key: msys2-ucrt64-gcc
-      - name: Install MinGW GCC
-        if: steps.msys2-cache.outputs.cache-hit != 'true'
-        shell: bash
-        run: C:/msys64/usr/bin/pacman.exe -S --noconfirm mingw-w64-ucrt-x86_64-gcc
-
-      - name: Resolve local replace directives (frontend)
-        shell: bash
-        working-directory: frontend
         run: |
-          go mod edit -dropreplace github.com/nelsong6/fzt
-          go mod edit -dropreplace github.com/nelsong6/fzt-terminal
-          go mod edit -droprequire github.com/nelsong6/fzt-terminal
-          go get github.com/nelsong6/fzt@latest
-          go get github.com/nelsong6/fzt-terminal@latest
-          go mod tidy
+          echo "${{ secrets.GITHUB_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+          docker pull "$IMAGE"
 
-      - name: Resolve local replace directives (cgo)
+      - name: Build
         shell: bash
-        working-directory: frontend/cgo
         run: |
-          go mod edit -dropreplace github.com/nelsong6/fzt
-          go mod edit -dropreplace github.com/nelsong6/fzt-terminal
-          go mod edit -dropreplace github.com/nelsong6/fzt-picker/frontend
-          go mod edit -droprequire github.com/nelsong6/fzt-terminal
-          go mod edit -replace github.com/nelsong6/fzt-picker/frontend=../
-          go get github.com/nelsong6/fzt@latest
-          go get github.com/nelsong6/fzt-terminal@latest
-          go mod tidy
-
-      - name: Build CGo DLL
-        shell: bash
-        working-directory: frontend/cgo
-        env:
-          CGO_ENABLED: "1"
-          CC: C:\msys64\ucrt64\bin\gcc.exe
-        run: go build -buildmode=c-shared -o ../picker_frontend.dll .
-
-      - name: Build standalone frontend
-        shell: bash
-        working-directory: frontend
-        env:
-          CGO_ENABLED: "0"
-        run: go build -o picker-frontend.exe .
+          docker run --rm \
+            -v "${{ github.workspace }}:C:/src" \
+            -w C:/src \
+            "$IMAGE" \
+            cmd /C " ^
+              cd windows && cargo build --release && cd .. ^
+              && cd frontend ^
+              && go mod edit -dropreplace github.com/nelsong6/fzt ^
+              && go mod edit -dropreplace github.com/nelsong6/fzt-terminal ^
+              && go mod edit -droprequire github.com/nelsong6/fzt-terminal ^
+              && go get github.com/nelsong6/fzt@latest ^
+              && go get github.com/nelsong6/fzt-terminal@latest ^
+              && go mod tidy ^
+              && cd cgo ^
+              && go mod edit -dropreplace github.com/nelsong6/fzt ^
+              && go mod edit -dropreplace github.com/nelsong6/fzt-terminal ^
+              && go mod edit -dropreplace github.com/nelsong6/fzt-picker/frontend ^
+              && go mod edit -droprequire github.com/nelsong6/fzt-terminal ^
+              && go mod edit -replace github.com/nelsong6/fzt-picker/frontend=../ ^
+              && go get github.com/nelsong6/fzt@latest ^
+              && go get github.com/nelsong6/fzt-terminal@latest ^
+              && go mod tidy ^
+              && set CGO_ENABLED=1 ^
+              && go build -buildmode=c-shared -o ../picker_frontend.dll . ^
+              && cd .. ^
+              && set CGO_ENABLED=0 ^
+              && go build -o picker-frontend.exe . ^
+            "
 
       # ── Release ────────────────────────────────────────────────
       - name: Prepare release assets
