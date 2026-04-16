@@ -22,6 +22,8 @@ jobs:
       - name: Update dependencies
         working-directory: frontend
         shell: bash
+        env:
+          GOPROXY: direct
         run: |
           go get github.com/nelsong6/fzt@latest
           go get github.com/nelsong6/fzt-terminal@latest
