@@ -4,6 +4,10 @@ on:
   repository_dispatch:
     types: [fzt-updated]
 
+concurrency:
+  group: dependency-update
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
