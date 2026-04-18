@@ -12,10 +12,10 @@ github.com/lucasb-eyer/go-colorful v1.3.0 h1:2/yBRLdWBZKrf7gB40FoiKfAWYQ0lqNcbuQ
 github.com/lucasb-eyer/go-colorful v1.3.0/go.mod h1:R4dSotOR9KMtayYi1e77YzuveK+i7ruzyGqttikkLy0=
 github.com/nelsong6/fzt v0.2.57 h1:2nynJfrGrKK7oXO2XhX+lryGwIcyrEOjQ6IAaIybmOc=
 github.com/nelsong6/fzt v0.2.57/go.mod h1:aEG+5uj9NbRCDnbZQSGLst2m1yKhHhsBSH9r4xvLOoc=
-github.com/nelsong6/fzt-frontend v0.1.12 h1:O7DEf3tcX8X/ZuwMZHX6FuggZjpMg1+7A7dqDakGR74=
-github.com/nelsong6/fzt-frontend v0.1.12/go.mod h1:rr370EDEotYmT1tyfrZNV9v35h6ld4/dZiagxZmNj9s=
-github.com/nelsong6/fzt-terminal v0.1.56 h1:RjMB6rU0vkFFSMub0XptmpmYn7S00uVC+F6mPGGgo1A=
-github.com/nelsong6/fzt-terminal v0.1.56/go.mod h1:3ACr06EGlp3UZipbHobOSb/Vfhg5mFMjk0mDvd2r8YE=
+github.com/nelsong6/fzt-frontend v0.1.13 h1:QkI9p/+/VWP5aFmcN7SAvDxzF68ZCMRblCm1oDHGgpU=
+github.com/nelsong6/fzt-frontend v0.1.13/go.mod h1:rr370EDEotYmT1tyfrZNV9v35h6ld4/dZiagxZmNj9s=
+github.com/nelsong6/fzt-terminal v0.1.57 h1:Yx65nC9pQUNAz2e9Zx0NWDC2tc/NdBnfVwyQLk6bdQU=
+github.com/nelsong6/fzt-terminal v0.1.57/go.mod h1:Poj2iqBh4+7pKk53Io31l4Lfm2Vro9aHBN821opSkzg=
 github.com/pmezard/go-difflib v1.0.0 h1:4DBwDE0NGyQoBHbLQYPwSUPoCMWR5BEzIk/f1lZbAQM=
 github.com/pmezard/go-difflib v1.0.0/go.mod h1:iKH77koFhYxTK1pcRnkKkqfTogsbg7gZNVY4sRDYZ/4=
 github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
