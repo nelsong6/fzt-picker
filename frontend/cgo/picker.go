@@ -48,6 +48,7 @@ var (
 	killTimerFn        = user32.NewProc("KillTimer")
 	getSystemMetrics   = user32.NewProc("GetSystemMetrics")
 	setWindowPos       = user32.NewProc("SetWindowPos")
+	getKeyStateProc    = user32.NewProc("GetKeyState")
 
 	// GDI
 	createFontW        = gdi32.NewProc("CreateFontW")
@@ -93,6 +94,7 @@ const (
 	VK_END              = 0x23
 	VK_PRIOR            = 0x21 // Page Up
 	VK_NEXT             = 0x22 // Page Down
+	VK_SHIFT            = 0x10
 	SM_CXSCREEN         = 0
 	SM_CYSCREEN         = 1
 	SWP_NOZORDER        = 0x0004
@@ -287,8 +289,17 @@ func renderAndInvalidate() {
 	}
 }
 
+// isShiftDown queries Win32 for the current Shift key state. The high-order
+// bit of GetKeyState's return is set while the key is physically pressed.
+// Called from inside the message-pump handler, so "current" state equals
+// state-at-keypress for all practical purposes.
+func isShiftDown() bool {
+	ret, _, _ := getKeyStateProc.Call(uintptr(VK_SHIFT))
+	return uint16(ret)&0x8000 != 0
+}
+
 func handleKeyInput(key tcell.Key, ch rune) {
-	frame, action := pickerSession.HandleKey(key, ch)
+	frame, action := pickerSession.HandleKey(key, ch, isShiftDown())
 	pickerMu.Lock()
 	pickerFrame = frame
 	pickerGrid = parseANSIGrid(frame.ANSI, gridCols, gridRows)
