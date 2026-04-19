@@ -8,7 +8,6 @@
 //	picker-frontend
 //	picker-frontend --folders-only
 //	picker-frontend --start-dir "D:\repos"
-//	picker-frontend --update
 package main
 
 import (
@@ -21,14 +20,6 @@ import (
 	"github.com/nelsong6/fzt-terminal/tui"
 
 	"github.com/nelsong6/fzt-picker/frontend/picker"
-)
-
-// Update-target metadata consumed by tui.RunUpdate. Kept as vars so the
-// binary self-updates from its own repo rather than fzt's.
-var (
-	updateRepo        = "nelsong6/fzt-picker"
-	updateAssetPrefix = "picker-frontend"
-	updateBinaryName  = "picker-frontend"
 )
 
 var (
@@ -65,14 +56,6 @@ func main() {
 				startDir = args[i+1]
 				i++
 			}
-		case "--update":
-			s := &core.State{
-				UpdateRepo:        updateRepo,
-				UpdateAssetPrefix: updateAssetPrefix,
-				UpdateBinaryName:  updateBinaryName,
-			}
-			tui.RunUpdate(s)
-			return
 		}
 	}
 

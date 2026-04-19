@@ -67,11 +67,7 @@ jobs:
         working-directory: frontend
         env:
           CGO_ENABLED: "0"
-        run: |
-          go build -o picker-frontend.exe .
-          # Produce the OS/arch-named asset consumed by tui.RunUpdate
-          # (`picker-frontend --update` downloads this via gh release).
-          cp picker-frontend.exe picker-frontend-windows-amd64.exe
+        run: go build -o picker-frontend.exe .
 
       # ── Upload to existing release ─────────────────────────────
       - name: Upload assets to release
@@ -85,6 +81,5 @@ jobs:
             windows/target/release/test-trigger.exe \
             frontend/picker_frontend.dll \
             frontend/picker-frontend.exe \
-            frontend/picker-frontend-windows-amd64.exe \
             --clobber \
             -R ${{ github.repository }}
