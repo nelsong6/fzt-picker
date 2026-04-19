@@ -68,7 +68,9 @@ jobs:
         env:
           CGO_ENABLED: "0"
         run: |
-          go build -o picker-frontend.exe .
+          # Stamp the git tag into render.Version so `--update` can compare
+          # the running version against the latest release and skip when equal.
+          go build -ldflags "-X github.com/nelsong6/fzt/render.Version=${{ inputs.tag }}" -o picker-frontend.exe .
           # Produce the OS/arch-named asset consumed by tui.RunUpdate
           # (`picker-frontend --update` downloads this via gh release).
           cp picker-frontend.exe picker-frontend-windows-amd64.exe
